@@ -26,7 +26,7 @@ class TransactionPool:
             for transaction_id, v in self._transactions.items()
         ]
 
-        return sorted(transaction_list, key=lambda transaction: transaction["fee"])[:count]
+        return sorted(transaction_list, key=lambda transaction: transaction["fee"], reverse=True)[:count]
 
     def delete_transaction(self, transaction_id):
         del self._transactions[transaction_id]
