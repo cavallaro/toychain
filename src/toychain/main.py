@@ -48,7 +48,7 @@ class Block:
             'timestamp': self.timestamp,
             'prev': self.prev,
             'nonce': self.nonce,
-            'transactions': [t.serialize() for t in self.transactions]
+            'transactions': [t.hashable_contents for t in self.transactions]
         }
 
     def serialize(self):
@@ -76,7 +76,7 @@ class Transaction:
         }
 
     def serialize(self):
-        return {**self.hashable_contents, **{'hash': self.calculate_hash()}}
+        return self.hashable_contents | {'signature': self.signature, 'public_key': self.public_key}
 
     def calculate_hash(self):
         return hashlib.sha256(json.dumps(self.hashable_contents, sort_keys=True).encode('utf-8')).hexdigest()
@@ -219,7 +219,7 @@ class Blockchain:
 
         return 0
 
-    def mine(self, miner_key: ecdsa.SigningKey):
+    def mine(self, miner_address):
         miner_fees = 0
 
         # handle Genesis block case
@@ -240,13 +240,11 @@ class Blockchain:
             miner_fees += transaction_entry['fee']
 
         # create the transaction to pay the block reward + mining fees
-        miner_address = hashlib.sha256(miner_key.verifying_key.to_string()).hexdigest()
         coinbase_transaction = Transaction(
             inputs=[],
             outputs=[{'address': miner_address, 'amount': self.block_reward + miner_fees}]
         )
-
-        coinbase_transaction.sign(key=miner_key)
+        # coinbase transaction has no signature.
         block.transactions.append(coinbase_transaction)
 
         # mine the block.
@@ -263,10 +261,10 @@ class Blockchain:
 
         return block
 
-    def initialize(self, miner_key):
+    def initialize(self, miner_address):
         self.blocks = []
         self.transaction_pool.flush()
-        self.mine(miner_key=miner_key)
+        self.mine(miner_address=miner_address)
 
 
 class Client:

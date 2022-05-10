@@ -31,7 +31,7 @@ def client():
 @pytest.fixture
 def blockchain(client):
     _blockchain = Blockchain()
-    _blockchain.initialize(miner_key=client.keys['b1917dfe83c6fa47b53aee554347e2fae535c7b2e035191946272df19b31694d'])
+    _blockchain.initialize(miner_address='b1917dfe83c6fa47b53aee554347e2fae535c7b2e035191946272df19b31694d')
 
     yield _blockchain
 
@@ -63,7 +63,7 @@ def first_transaction(blockchain, client):
 
 def test_mine_ok(blockchain, first_transaction, client):
     blockchain.add_transaction_to_pool(first_transaction)
-    block = blockchain.mine(miner_key=client.keys['b1917dfe83c6fa47b53aee554347e2fae535c7b2e035191946272df19b31694d'])
+    block = blockchain.mine(miner_address='b1917dfe83c6fa47b53aee554347e2fae535c7b2e035191946272df19b31694d')
 
     assert blockchain.height == 1
     assert block.calculate_hash().startswith('0' * blockchain.difficulty)
@@ -79,7 +79,7 @@ def test_mine_block_with_two_transactions_ok(blockchain, first_transaction, clie
     assert blockchain.calculate_balance('b1917dfe83c6fa47b53aee554347e2fae535c7b2e035191946272df19b31694d') == 50
 
     blockchain.add_transaction_to_pool(first_transaction)
-    block = blockchain.mine(miner_key=client.keys['b1917dfe83c6fa47b53aee554347e2fae535c7b2e035191946272df19b31694d'])
+    block = blockchain.mine(miner_address='b1917dfe83c6fa47b53aee554347e2fae535c7b2e035191946272df19b31694d')
 
     # block_00.block_reward = 50
     # block_01.transaction_00 = -50 (in) + 28 (change)
@@ -127,7 +127,7 @@ def test_mine_block_with_two_transactions_ok(blockchain, first_transaction, clie
 
     # mine as user_04.
     # user_04 had no unspents available, now there should be one with 1 + 1 + block_reward.
-    block = blockchain.mine(miner_key=client.keys['d79a2f79fb96a0e687094bc896251dae046e571e02d80d2c940f1a18a539f650'])
+    block = blockchain.mine(miner_address='d79a2f79fb96a0e687094bc896251dae046e571e02d80d2c940f1a18a539f650')
 
     # mined successfully
     assert block is not None
@@ -164,7 +164,7 @@ def test_mine_block_with_two_transactions_ok(blockchain, first_transaction, clie
 
 def test_input_has_already_been_spent(blockchain, first_transaction, client):
     blockchain.add_transaction_to_pool(first_transaction)
-    blockchain.mine(miner_key=client.keys['b1917dfe83c6fa47b53aee554347e2fae535c7b2e035191946272df19b31694d'])
+    blockchain.mine(miner_address='b1917dfe83c6fa47b53aee554347e2fae535c7b2e035191946272df19b31694d')
 
     # let's try to 'broadcast' the same transaction once more
     with pytest.raises(Exception) as e:
@@ -209,7 +209,7 @@ def test_no_miners_fee_ok(blockchain, client):
     client.sign(transaction, 'b1917dfe83c6fa47b53aee554347e2fae535c7b2e035191946272df19b31694d')
     blockchain.add_transaction_to_pool(transaction)
 
-    block = blockchain.mine(miner_key=client.keys['b1917dfe83c6fa47b53aee554347e2fae535c7b2e035191946272df19b31694d'])
+    block = blockchain.mine(miner_address='b1917dfe83c6fa47b53aee554347e2fae535c7b2e035191946272df19b31694d')
 
     # mined successfully
     assert block is not None
