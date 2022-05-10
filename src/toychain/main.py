@@ -1,3 +1,4 @@
+import base64
 import hashlib
 import json
 import logging
@@ -52,7 +53,13 @@ class Block:
         }
 
     def serialize(self):
-        return {**self.hashable_contents, **{'hash': self.calculate_hash()}}
+        return {
+            'timestamp': self.timestamp,
+            'prev': self.prev,
+            'nonce': self.nonce,
+            'hash': self.calculate_hash(),
+            'transactions': [t.serialize() for t in self.transactions]
+        }
 
     def calculate_hash(self):
         return hashlib.sha256(json.dumps(self.hashable_contents, sort_keys=True).encode('utf-8')).hexdigest()
@@ -76,7 +83,11 @@ class Transaction:
         }
 
     def serialize(self):
-        return self.hashable_contents | {'signature': self.signature, 'public_key': self.public_key}
+        return self.hashable_contents | {
+            'signature': self.signature.decode('utf-8') if self.signature else None,
+            'public_key': self.public_key.decode('utf-8') if self.public_key else None,
+            'hash': self.calculate_hash()
+        }
 
     def calculate_hash(self):
         return hashlib.sha256(json.dumps(self.hashable_contents, sort_keys=True).encode('utf-8')).hexdigest()
@@ -85,8 +96,8 @@ class Transaction:
         # not a fan of these capabilities on what are otherwise plain data structs, however this is rather convenient,
         # at least for now.
         signature = key.sign(json.dumps(self.hashable_contents, sort_keys=True).encode('utf-8'), hashfunc=hashlib.sha256)
-        self.signature = signature
-        self.public_key = key.verifying_key.to_string()
+        self.signature = base64.b64encode(signature)
+        self.public_key = base64.b64encode(key.verifying_key.to_string())
 
 
 class Blockchain:
@@ -175,18 +186,19 @@ class Blockchain:
 
     def can_redeem(self, transaction, source_transaction, vout):
         output = source_transaction.outputs[vout]
-        public_key_hash = hashlib.sha256(transaction.public_key).hexdigest()
+        public_key_bytes = base64.b64decode(transaction.public_key)
+        public_key_hash = hashlib.sha256(public_key_bytes).hexdigest()
 
         # in a cheap attempt to resemble "OP_EQUALVERIFY"
         if output['address'] != public_key_hash:
             raise Exception(f"Public Key hash: {public_key_hash} does not match output's address: {output['address']}")
 
         # same, but with "OP_CHECKSIG"
-        public_key = ecdsa.VerifyingKey.from_string(transaction.public_key, curve=ecdsa.SECP256k1)
+        public_key = ecdsa.VerifyingKey.from_string(public_key_bytes, curve=ecdsa.SECP256k1)
 
         # TODO: wrap this exception in an exception of our own.
         public_key.verify(
-            signature=transaction.signature,
+            signature=base64.b64decode(transaction.signature),
             data=json.dumps(transaction.hashable_contents, sort_keys=True).encode('utf-8'),
             hashfunc=hashlib.sha256
         )
