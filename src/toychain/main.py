@@ -8,7 +8,6 @@ import time
 import ecdsa
 
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger('toychain')
 
 
@@ -44,6 +43,10 @@ class Block:
         self.transactions = transactions or []
 
     @property
+    def is_genesis(self):
+        return self.prev == "0" * 64
+
+    @property
     def hashable_contents(self):
         return {
             'timestamp': self.timestamp,
@@ -60,6 +63,17 @@ class Block:
             'hash': self.calculate_hash(),
             'transactions': [t.serialize() for t in self.transactions]
         }
+
+    @classmethod
+    def unserialize(cls, serialized_block):
+        return Block(
+            prev=serialized_block["prev"],
+            nonce=serialized_block["nonce"],
+            timestamp=serialized_block["timestamp"],
+            transactions=[
+                Transaction.unserialize(transaction) for transaction in serialized_block['transactions']
+            ]
+        )
 
     def calculate_hash(self):
         return hashlib.sha256(json.dumps(self.hashable_contents, sort_keys=True).encode('utf-8')).hexdigest()
@@ -88,6 +102,25 @@ class Transaction:
             'public_key': self.public_key.decode('utf-8') if self.public_key else None,
             'hash': self.calculate_hash()
         }
+
+    @classmethod
+    def unserialize(cls, serialized_transaction):
+        transaction = Transaction(
+            inputs=serialized_transaction["inputs"],
+            outputs=serialized_transaction["outputs"],
+            timestamp=serialized_transaction["timestamp"],
+        )
+
+        # unsigned transactions won't have these
+        signature = serialized_transaction.get('signature')
+        if signature:
+            transaction.signature = signature.encode('utf-8')
+
+        public_key = serialized_transaction.get('public_key')
+        if public_key:
+            transaction.public_key = public_key.encode('utf-8')
+
+        return transaction
 
     def calculate_hash(self):
         return hashlib.sha256(json.dumps(self.hashable_contents, sort_keys=True).encode('utf-8')).hexdigest()
@@ -139,7 +172,7 @@ class Blockchain:
 
     @property
     def difficulty(self):
-        return 2 + int(self.height / 2)
+        return 10 + int(self.height / 2)
 
     @property
     def block_reward(self):
@@ -149,6 +182,26 @@ class Blockchain:
     def add_transaction_to_pool(self, transaction):
         transaction_fee = self.verify_transaction(transaction)
         self.transaction_pool.add_transaction(transaction=transaction, fee=transaction_fee)
+
+    def get_next_block(self, previous_hash):
+        for block_number, block in enumerate(self.blocks):
+            if block.calculate_hash() == previous_hash:
+                if len(self.blocks) == block_number + 1:  # this is the last block!
+                    return None
+                else:
+                    return self.blocks[block_number + 1]
+
+        raise Exception("Block with hash: %s not found")
+
+    def add_block(self, block):
+        if self.height < 0:
+            if not block.is_genesis:
+                raise Exception("First block in the chain must be a Genesis block")
+
+        elif block.prev != self.blocks[-1].calculate_hash():
+            raise Exception("Block's previous hash is not our tip")
+
+        self.blocks.append(block)
 
     def get_transaction(self, transaction_id, block_height=None):
         # linear lookup of transaction `transaction_id`,  from `block_height`, backwards. Assume chain tip if no
@@ -176,22 +229,28 @@ class Blockchain:
 
         if block_height == 0:
             return True
+
         for transaction in self.blocks[block_height].transactions:
             for input in transaction.inputs:
                 if input['transaction_id'] == output['transaction_id'] and input['vout'] == output['vout']:
-                    print(f"output was already spent in transaction_id: {input['transaction_id']}, vout: {input['vout']}")
+                    logger.warning(
+                        "Output was spent in transaction_id: %s, vout: %s",
+                        input['transaction_id'], input['vout']
+                    )
                     return False
 
         return self._is_output_available(output, block_height - 1)
 
-    def can_redeem(self, transaction, source_transaction, vout):
+    def _can_redeem(self, transaction, source_transaction, vout):
         output = source_transaction.outputs[vout]
         public_key_bytes = base64.b64decode(transaction.public_key)
         public_key_hash = hashlib.sha256(public_key_bytes).hexdigest()
 
         # in a cheap attempt to resemble "OP_EQUALVERIFY"
         if output['address'] != public_key_hash:
-            raise Exception(f"Public Key hash: {public_key_hash} does not match output's address: {output['address']}")
+            raise Exception(
+                "Public Key hash: %s does not match output's address: %s" % (public_key_hash, output['address'])
+            )
 
         # same, but with "OP_CHECKSIG"
         public_key = ecdsa.VerifyingKey.from_string(public_key_bytes, curve=ecdsa.SECP256k1)
@@ -209,11 +268,14 @@ class Blockchain:
         # check that the inputs haven't been spent.
         for input in transaction.inputs:
             if not self._is_output_available(input):
-                raise Exception(f"Can't verify transaction because input: {input} is unavailable")
+                raise Exception("Can't verify transaction because input: %s is unavailable" % input)
 
             # prove that the transaction signer is entitled to redeeming that output.
             source_transaction = self.get_transaction(input['transaction_id'])
-            self.can_redeem(transaction, source_transaction, vout=input['vout'])
+            if not source_transaction:  # TODO: write testcase
+                raise Exception("transaction_id: %s could not be found" % input['transaction_id'])
+
+            self._can_redeem(transaction, source_transaction, vout=input['vout'])
 
             vout = input['vout']
             output = source_transaction.outputs[vout]
@@ -226,7 +288,7 @@ class Blockchain:
             if fee < 0:
                 raise Exception("Output amount is higher than input amount")
 
-            logger.info("fee for transaction_id: %s is: %s", transaction.calculate_hash(), fee)
+            logger.info("transaction_id: %s pays %s units in miner fees", transaction.calculate_hash(), fee)
             return fee
 
         return 0
@@ -256,16 +318,20 @@ class Blockchain:
             inputs=[],
             outputs=[{'address': miner_address, 'amount': self.block_reward + miner_fees}]
         )
+
         # coinbase transaction has no signature.
         block.transactions.append(coinbase_transaction)
 
         # mine the block.
+        mask = int('f'*64, base=16) >> self.difficulty
+
         hash = block.calculate_hash()
-        while not hash.startswith('0' * self.difficulty):
+        while not int(hash, base=16) | mask == mask:
             block.nonce += 1
             hash = block.calculate_hash()
 
         self.blocks.append(block)
+        logger.info("A new block with hash: %s has been mined, new height: %s", hash, self.height)
 
         # clear mined transactions from the transaction pool
         for transaction in transaction_entries:
