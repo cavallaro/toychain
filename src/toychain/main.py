@@ -11,6 +11,18 @@ import ecdsa
 logger = logging.getLogger('toychain')
 
 
+class BlockchainError(Exception):
+    pass
+
+
+class InputIsUnavailableError(BlockchainError):
+    pass
+
+
+class TransactionIsNotInPoolError(BlockchainError):
+    pass
+
+
 class TransactionPool:
     def __init__(self):
         self._transactions = {}
@@ -29,7 +41,10 @@ class TransactionPool:
         return sorted(transaction_list, key=lambda transaction: transaction["fee"], reverse=True)[:count]
 
     def delete_transaction(self, transaction_id):
-        del self._transactions[transaction_id]
+        try:
+            del self._transactions[transaction_id]
+        except KeyError:
+            raise TransactionIsNotInPoolError()
 
     def flush(self):
         self._transactions = {}
@@ -89,6 +104,10 @@ class Transaction:
         self.public_key = None
 
     @property
+    def is_coinbase(self):
+        return len(self.inputs) == 0
+
+    @property
     def hashable_contents(self):
         return {
             'inputs': self.inputs,
@@ -134,10 +153,13 @@ class Transaction:
 
 
 class Blockchain:
-    def __init__(self, transactions_per_block=2):
+    def __init__(self, transactions_per_block=2, confirmations=2):
         self.transactions_per_block = transactions_per_block
+        self.confirmations = confirmations
         self.transaction_pool = TransactionPool()
         self.blocks = []
+        self.fork = []
+        self.orphans = []
 
     def calculate_balance(self, address):
         outputs = {}  # {(transaction_id, vout): amount}
@@ -167,6 +189,10 @@ class Blockchain:
         return sum(outputs.values())
 
     @property
+    def tip(self):
+        return self.blocks[-1]
+
+    @property
     def height(self):
         return len(self.blocks) - 1
 
@@ -193,15 +219,141 @@ class Blockchain:
 
         raise Exception("Block with hash: %s not found")
 
-    def add_block(self, block):
+    def get_block_height(self, hash):
+        for block_height, block in enumerate(self.blocks):
+            if block.calculate_hash() == hash:
+                return block_height
+
+    def get_block(self, hash):
+        for block in self.blocks:
+            if block.calculate_hash() == hash:
+                return block
+
+    # def get_block(self, hash, limit=None):
+    #     for i in range(limit or self.height + 1):
+    #         if self.height < i:
+    #             # can't go before the Genesis block
+    #             return None, None
+    #
+    #         block_height = self.height - i
+    #         block = self.blocks[block_height]
+    #         if block.calculate_hash() == hash:
+    #             return block, block_height
+    #
+    #     return None, None
+
+    def receive_block(self, block):
+        # This blockchain can handle currently only one fork from the main chain at any given time.
+        # TODO: support a tree of forks.
+        # The way this algorithm would work is:
+        # A---B---C---D                     #1
+        #     |
+        #     +---C'--D'                    #2
+        #     |
+        #     +---C"--D"--E"--F"--G"--H"    #3
+        #             |
+        #             +---E^--F^            #4
+        # Calculate the length of each chain (easiest way would be to count backwards from the leaves):
+        # A  B  C  D  = 4                   #1
+        # A  B  C' D' = 4                   #2
+        # A  B  C" D" E" F" G" H" = 8       #3
+        # A  B  C" D" E^ F^ = 6             #4
+        # Select the largest one: #4.
+        # Discard all other chains that are shorter than 8 - self.confirmations. Assuming self.confirmations = 2, chains
+        #   #1 and #2 are discarded, this means to remove all the blocks in these chains that are not in any other chain
+        #   still considered a valid fork, so C, D, C' and D' are thrown away.
+        # If any of the discarded blocks was the tip of our main chain:
+        #   - select the tip of the largest chain as the tip of our new main chain.
+        #   - return to the pool the transactions in the discarded blocks that were part of our main chain.
+        self._receive_block(block)
+        self._reconverge()
+
+    def _receive_block(self, block):
         if self.height < 0:
             if not block.is_genesis:
                 raise Exception("First block in the chain must be a Genesis block")
 
-        elif block.prev != self.blocks[-1].calculate_hash():
-            raise Exception("Block's previous hash is not our tip")
+            self.blocks.append(block)
+            logger.info("Genesis block has been added")
 
-        self.blocks.append(block)
+        elif block.prev == self.tip.calculate_hash():
+            self.blocks.append(block)
+            logger.info("New block has been added, new height: %s", self.height)
+
+        else:
+            logger.warning("Block's previous hash is not our tip")
+            # see if the previous block is within the last `self.confirmations` blocks in the main chain
+            fork_block_height = self.get_block_height(hash=block.prev)
+
+            if fork_block_height is not None:
+                # previous block exists in the main chain
+                block_height = fork_block_height + 1
+
+                if self.height - block_height < self.confirmations:
+                    self.fork = [block]
+                    logger.warning("Fork at block %s", fork_block_height)
+
+                else:
+                    logger.warning(
+                        "Fork at block %s, but the next block has %s confirmations",
+                        fork_block_height, self.height - block_height
+                    )
+
+            elif self.fork and block.prev == self.fork[-1].calculate_hash():
+                self.fork.append(block)
+                logger.warning("Block points to the tip of a fork, fork is now %s blocks long", len(self.fork))
+
+            else:
+                # as we won't be tracking multiple forks in this basic implementation, we assume this is an orphan block
+                self.orphans.append(block)
+                logger.warning("Orphan block received: %s", block.serialize())
+
+    def _reconverge(self):
+        if self.fork:
+            # Get the common block between both chains
+            fork_block_height = self.get_block_height(hash=self.fork[0].prev)
+            secondary_chain_height = fork_block_height + len(self.fork)
+
+            if self.height - secondary_chain_height >= self.confirmations:
+                logger.warning("Main chain is %s blocks longer than the fork chain, clearing fork", self.confirmations)
+                self.fork.clear()
+
+            elif secondary_chain_height - self.height >= self.confirmations:
+                logger.warning(
+                    "Fork chain is %s blocks longer than main chain! reconverging from height: %s",
+                    self.confirmations, fork_block_height
+                )
+
+                # return transactions in the dead branch to the transaction pool
+                blocks_to_remove = self.blocks[fork_block_height+1:]
+
+                # reconverge
+                self.blocks[fork_block_height+1:] = self.fork[:]
+
+                for block in blocks_to_remove:
+                    for transaction in block.transactions:
+                        if not transaction.is_coinbase:
+                            try:
+                                self.add_transaction_to_pool(transaction)
+                            except InputIsUnavailableError as e:
+                                # one or more inputs may have been spent
+                                logger.warning(
+                                    "Can't return transaction_id: %s to transaction pool: %s",
+                                    transaction.calculate_hash(), str(e)
+                                )
+
+                # remove transactions in the new branch from the transaction pool
+                for block in self.fork:
+                    for transaction in block.transactions:
+                        if not transaction.is_coinbase:
+                            try:
+                                self.transaction_pool.delete_transaction(transaction_id=transaction.calculate_hash())
+                            except TransactionIsNotInPoolError:
+                                logger.warning(
+                                    "transaction_id: %s not in transaction pool", transaction.calculate_hash()
+                                )
+
+                self.fork.clear()
 
     def get_transaction(self, transaction_id, block_height=None):
         # linear lookup of transaction `transaction_id`,  from `block_height`, backwards. Assume chain tip if no
@@ -268,7 +420,7 @@ class Blockchain:
         # check that the inputs haven't been spent.
         for input in transaction.inputs:
             if not self._is_output_available(input):
-                raise Exception("Can't verify transaction because input: %s is unavailable" % input)
+                raise InputIsUnavailableError("Can't verify transaction because input: %s is unavailable" % input)
 
             # prove that the transaction signer is entitled to redeeming that output.
             source_transaction = self.get_transaction(input['transaction_id'])
@@ -305,7 +457,7 @@ class Blockchain:
 
         # create an empty block, point at the previous block (except in Genesis block case)
         block = Block(
-            prev=self.blocks[self.height].calculate_hash() if self.height >= 0 else "0" * 64,
+            prev=self.tip.calculate_hash() if self.height >= 0 else "0" * 64,
             timestamp=time.time_ns()
         )
 
@@ -326,11 +478,11 @@ class Blockchain:
         mask = int('f'*64, base=16) >> self.difficulty
 
         hash = block.calculate_hash()
-        while not int(hash, base=16) | mask == mask:
+        while not int(hash, base=16) <= mask:
             block.nonce += 1
             hash = block.calculate_hash()
 
-        self.blocks.append(block)
+        self.receive_block(block)
         logger.info("A new block with hash: %s has been mined, new height: %s", hash, self.height)
 
         # clear mined transactions from the transaction pool
@@ -342,7 +494,7 @@ class Blockchain:
     def initialize(self, miner_address):
         self.blocks = []
         self.transaction_pool.flush()
-        self.mine(miner_address=miner_address)
+        return self.mine(miner_address=miner_address)
 
 
 class Client:

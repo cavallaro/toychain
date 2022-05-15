@@ -91,7 +91,7 @@ def create_app():
     def receive_block():
         block = toychain.main.Block.unserialize(flask.request.json['block'])
         app.logger.info("New block received, with hash: %s, prev: %s", block.calculate_hash(), block.prev)
-        blockchain.add_block(block)
+        blockchain.receive_block(block)
         return "", 202
 
     return app
