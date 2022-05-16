@@ -32,6 +32,7 @@ def create_app():
     app.config['TRAP_BAD_REQUEST_ERRORS'] = True
 
     blockchain_filename = os.getenv("TOYCHAIN_BLOCKCHAIN_FILE", "blockchain.json")
+    blockchain_peers = set(os.getenv("TOYCHAIN_PEERS", "").split())
 
     def load_blockchain(blockchain_filename):
         global blockchain
@@ -40,6 +41,7 @@ def create_app():
             serialized_blockchain = json.load(f)
 
         blockchain = toychain.main.Blockchain.unserialize(serialized_blockchain)
+        blockchain.peers = blockchain_peers
         app.logger.info(
             "Load blockchain call, blocks: %s, fork blocks: %s, orphan blocks: %s",
             len(blockchain.blocks), len(blockchain.fork), len(blockchain.orphans)
@@ -207,8 +209,8 @@ def create_app():
     except FileNotFoundError:
         app.logger.info("No blockchain file exists.")
         blockchain = toychain.main.Blockchain()
+        blockchain.peers = blockchain_peers
 
-    blockchain.peers = set(os.getenv("TOYCHAIN_PEERS", "").split())
     # blockchain.initialize(miner_address="b1917dfe83c6fa47b53aee554347e2fae535c7b2e035191946272df19b31694d")
 
     if int(os.getenv("TOYCHAIN_SYNCHRONIZE", 0)):
