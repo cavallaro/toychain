@@ -266,6 +266,16 @@ class Blockchain:
     #
     #     return None, None
 
+    def _remove_transactions_from_pool(self, block):
+        for transaction in block.transactions:
+            if not transaction.is_coinbase:
+                try:
+                    self.transaction_pool.delete_transaction(transaction_id=transaction.calculate_hash())
+                except TransactionIsNotInPoolError:
+                    logger.warning(
+                        "transaction_id: %s not in transaction pool", transaction.calculate_hash()
+                    )
+
     def receive_block(self, block):
         # This blockchain can handle currently only one fork from the main chain at any given time.
         # TODO: support a tree of forks.
@@ -311,7 +321,7 @@ class Blockchain:
         elif block.prev == self.tip.calculate_hash():
             self.blocks.append(block)
             logger.info("New block has been added, new height: %s", self.height)
-            # TODO: prune the transactions in this block from transaction pool
+            self._remove_transactions_from_pool(block)
             self.publish_block(block)
 
         else:
@@ -379,14 +389,7 @@ class Blockchain:
 
                 # remove transactions in the new branch from the transaction pool
                 for block in self.fork:
-                    for transaction in block.transactions:
-                        if not transaction.is_coinbase:
-                            try:
-                                self.transaction_pool.delete_transaction(transaction_id=transaction.calculate_hash())
-                            except TransactionIsNotInPoolError:
-                                logger.warning(
-                                    "transaction_id: %s not in transaction pool", transaction.calculate_hash()
-                                )
+                    self._remove_transactions_from_pool(block)
 
                 self.fork.clear()
 
@@ -524,10 +527,6 @@ class Blockchain:
 
         logger.info("A new block with hash: %s has been mined, tentative new height: %s", hash, self.height + 1)
         self.receive_block(block)
-
-        # clear mined transactions from the transaction pool
-        for transaction in transaction_entries:
-            self.transaction_pool.delete_transaction(transaction_id=transaction['transaction_id'])
 
         return block
 

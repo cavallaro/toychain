@@ -120,6 +120,8 @@ def create_app():
 
     @app.route('/blocks', methods=['POST'])
     def receive_block():
+        # note: we will try to retransmit the block to the sender, too, because the `publish_block` method is unaware
+        #   of who sent it.
         block = toychain.main.Block.unserialize(json.loads(flask.request.json))
         app.logger.info("New block received, with hash: %s, prev: %s", block.calculate_hash(), block.prev)
         blockchain.receive_block(block)
