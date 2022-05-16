@@ -45,16 +45,6 @@ def create_app():
             len(blockchain.blocks), len(blockchain.fork), len(blockchain.orphans)
         )
 
-    # load blockchain (if available)
-    try:
-        load_blockchain(blockchain_filename)
-    except FileNotFoundError:
-        app.logger.info("No blockchain file exists.")
-        blockchain = toychain.main.Blockchain()
-
-    blockchain.peers = set(os.getenv("TOYCHAIN_PEERS", "").split())
-    # blockchain.initialize(miner_address="b1917dfe83c6fa47b53aee554347e2fae535c7b2e035191946272df19b31694d")
-
     @contextlib.contextmanager
     def restart_miner():
         global miner
@@ -74,46 +64,15 @@ def create_app():
             )
             miner.start()
 
-    @app.route('/transactions/<string:transaction_id>', methods=['GET'])
-    def get_transaction(transaction_id):
-        transaction = blockchain.get_transaction(transaction_id)
-        if transaction:
-            return flask.jsonify(transaction.serialize())
-        else:
-            return "", 404
+    ##
+    # balances
 
     @app.route('/balances/<string:address>', methods=['GET'])
     def get_balance(address):
-        balance = blockchain.calculate_balance(address)
-        return flask.jsonify({"balance": balance or 0})
+        return flask.jsonify({"balance": blockchain.calculate_balance(address) or 0})
 
-    @app.route('/mine', methods=['POST'])
-    def mine():
-        address = flask.request.json['address']
-        app.logger.info("Block rewards and fees will be paid to: %s", address)
-        block = blockchain.mine(miner_address=address)
-        return block.serialize()
-
-    @app.route('/transactions/sign', methods=['POST'])
-    def sign_transaction():
-        """
-        Body:
-            {
-                "transaction": serialized Transaction, must at least contain inputs, outputs, timestamp.
-                "key": base64 encoded
-            }
-        Query string:
-            add-to-transaction-pool
-        """
-
-        transaction = toychain.main.Transaction.unserialize(flask.request.json['transaction'])
-        key = ecdsa.SigningKey.from_string(base64.b64decode(flask.request.json['key']), curve=ecdsa.SECP256k1)
-        transaction.sign(key=key)
-
-        if "add-to-transaction-pool" in flask.request.args:
-            blockchain.add_transaction_to_pool(transaction)
-
-        return transaction.serialize()
+    ##
+    # blocks
 
     @app.route('/blocks/<block_hash>', methods=['GET'])
     def get_block(block_hash):
@@ -160,16 +119,62 @@ def create_app():
         #   of who sent it.
         block = toychain.main.Block.unserialize(json.loads(flask.request.json))
         app.logger.info("New block received, with hash: %s, prev: %s", block.calculate_hash(), block.prev)
+
         blockchain.receive_block(block)
+
         return "", 202
+
+    ##
+    # transactions
+
+    @app.route('/transactions/<string:transaction_id>', methods=['GET'])
+    def get_transaction(transaction_id):
+        transaction = blockchain.get_transaction(transaction_id)
+        if transaction:
+            return flask.jsonify(transaction.serialize())
+        else:
+            return "", 404
 
     @app.route('/transactions', methods=['POST'])
     def receive_transaction():
         # note: same as on receive_block
         transaction = toychain.main.Transaction.unserialize(json.loads(flask.request.json))
         app.logger.info("New transaction received, with hash: %s", transaction.calculate_hash())
+
         blockchain.add_transaction_to_pool(transaction)
+
         return "", 202
+
+    @app.route('/transactions/sign', methods=['POST'])
+    def sign_transaction():
+        """
+        Body:
+            {
+                "transaction": serialized Transaction, must at least contain inputs, outputs, timestamp.
+                "key": base64 encoded
+            }
+        Query string:
+            add-to-transaction-pool
+        """
+
+        transaction = toychain.main.Transaction.unserialize(flask.request.json['transaction'])
+        key = ecdsa.SigningKey.from_string(base64.b64decode(flask.request.json['key']), curve=ecdsa.SECP256k1)
+        transaction.sign(key=key)
+
+        if "add-to-transaction-pool" in flask.request.args:
+            blockchain.add_transaction_to_pool(transaction)
+
+        return transaction.serialize()
+
+    ##
+    # control, not a part of the public API
+
+    @app.route('/mine', methods=['POST'])
+    def mine():
+        address = flask.request.json['address']
+        app.logger.info("Block rewards and fees will be paid to: %s", address)
+        block = blockchain.mine(miner_address=address)
+        return block.serialize()
 
     @app.route('/persistence/save', methods=['POST'])
     def save():
@@ -193,6 +198,18 @@ def create_app():
     def synchronize():
         blockchain.synchronize()
         return "", 200
+
+    ##
+
+    # load blockchain (if available)
+    try:
+        load_blockchain(blockchain_filename)
+    except FileNotFoundError:
+        app.logger.info("No blockchain file exists.")
+        blockchain = toychain.main.Blockchain()
+
+    blockchain.peers = set(os.getenv("TOYCHAIN_PEERS", "").split())
+    # blockchain.initialize(miner_address="b1917dfe83c6fa47b53aee554347e2fae535c7b2e035191946272df19b31694d")
 
     if int(os.getenv("TOYCHAIN_SYNCHRONIZE", 0)):
         app.logger.info("Attempt to synchronize before starting")
