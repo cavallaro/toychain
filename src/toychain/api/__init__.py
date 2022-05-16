@@ -12,7 +12,14 @@ import toychain.main
 import toychain.miner
 
 
+blockchain = None
+miner = None
+
+
 def create_app():
+    global blockchain
+    global miner
+
     logging.basicConfig(
         format="%(thread)s %(threadName)12.12s %(pathname)-32.32s:%(lineno)4s %(levelname)-8s %(asctime)s | %(message)s",
         level=logging.DEBUG
@@ -21,16 +28,25 @@ def create_app():
     app = flask.Flask(__name__)
     app.config['TRAP_BAD_REQUEST_ERRORS'] = True
 
-    blockchain = None
+    blockchain_filename = os.getenv("TOYCHAIN_BLOCKCHAIN_FILE", "blockchain.json")
+
+    def load_blockchain(blockchain_filename):
+        global blockchain
+
+        with open(blockchain_filename) as f:
+            serialized_blockchain = json.load(f)
+
+        blockchain = toychain.main.Blockchain.unserialize(serialized_blockchain)
+        app.logger.info(
+            "Load blockchain call, blocks: %s, fork blocks: %s, orphan blocks: %s",
+            len(blockchain.blocks), len(blockchain.fork), len(blockchain.orphans)
+        )
 
     # load blockchain (if available)
     try:
-        with open("blockchain.json") as f:
-            serialized_blockchain = json.load(f)
-        app.logger.info("A blockchain.json file exists, loading...")
-        blockchain = toychain.main.Blockchain.unserialize(serialized_blockchain)
+        load_blockchain(blockchain_filename)
     except FileNotFoundError:
-        app.logger.info("No blockchain.json file exists.")
+        app.logger.info("No blockchain file exists.")
         blockchain = toychain.main.Blockchain()
 
     blockchain.peers = set(os.getenv("TOYCHAIN_PEERS", "").split())
@@ -109,10 +125,43 @@ def create_app():
         blockchain.receive_block(block)
         return "", 202
 
+    @app.route('/persistence/save', methods=['POST'])
+    def save():
+        with open(flask.request.json.get('filename', blockchain_filename), "w") as f:
+            app.logger.info(
+                "Save blockchain call, blocks: %s, fork blocks: %s, orphan blocks: %s",
+                len(blockchain.blocks), len(blockchain.fork), len(blockchain.orphans)
+            )
+            json.dump(blockchain.serialize(), f)
+
+        return "", 200
+
+    @app.route('/persistence/load', methods=['POST'])
+    def load():
+        global miner
+
+        miner_was_alive = False
+        if miner and miner.is_alive():
+            miner.stop()
+            miner.join()
+            miner_was_alive = True
+
+        load_blockchain(flask.request.json.get('filename', blockchain_filename))
+
+        if miner_was_alive:
+            miner = toychain.miner.Miner(
+                blockchain=blockchain,
+                miner_address='b1917dfe83c6fa47b53aee554347e2fae535c7b2e035191946272df19b31694d'
+            )
+            miner.start()
+
+        return "", 200
+
     miner = toychain.miner.Miner(
         blockchain=blockchain,
         miner_address='b1917dfe83c6fa47b53aee554347e2fae535c7b2e035191946272df19b31694d'
     )
+
     miner.start()
 
     return app

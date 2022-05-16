@@ -311,6 +311,7 @@ class Blockchain:
         elif block.prev == self.tip.calculate_hash():
             self.blocks.append(block)
             logger.info("New block has been added, new height: %s", self.height)
+            # TODO: prune the transactions in this block from transaction pool
             self.publish_block(block)
 
         else:
@@ -486,7 +487,6 @@ class Blockchain:
         transaction_entries = self.transaction_pool.get_transactions(count=2)
         if len(transaction_entries) == 0 and self.height >= 0:
             # not an error per se, as the transaction pool can be empty.
-            logger.info("Can't mine an empty block unless this is the Genesis block.")
             return None
 
         # create an empty block, point at the previous block (except in Genesis block case)
@@ -513,6 +513,7 @@ class Blockchain:
 
         hash = block.calculate_hash()
 
+        logger.info("Attempt to mine a new block with %s transactions", len(transaction_entries))
         while not int(hash, base=16) <= mask:
             if self.blocks and self.tip.prev == block.prev:
                 logger.info("Someone else has already mined the next block, so we'll abort this attempt.")
