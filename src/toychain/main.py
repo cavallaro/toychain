@@ -195,6 +195,23 @@ class Blockchain:
 
         return blockchain
 
+    @property
+    def tip(self):
+        return self.blocks[-1]
+
+    @property
+    def height(self):
+        return len(self.blocks) - 1
+
+    @property
+    def difficulty(self):
+        return self.base_difficulty + int(self.height / 2)
+
+    @property
+    def block_reward(self):
+        # halve every 5 blocks.
+        return int(self.base_block_reward/(int(self.height / 5)+1))
+
     def calculate_balance(self, address):
         outputs = {}  # {(transaction_id, vout): amount}
 
@@ -222,23 +239,6 @@ class Blockchain:
 
         return sum(outputs.values())
 
-    @property
-    def tip(self):
-        return self.blocks[-1]
-
-    @property
-    def height(self):
-        return len(self.blocks) - 1
-
-    @property
-    def difficulty(self):
-        return self.base_difficulty + int(self.height / 2)
-
-    @property
-    def block_reward(self):
-        # halve every 5 blocks.
-        return int(self.base_block_reward/(int(self.height / 5)+1))
-
     def add_transaction_to_pool(self, transaction):
         transaction_id = transaction.calculate_hash()
         try:
@@ -250,6 +250,16 @@ class Blockchain:
         else:
             # if it's in the pool, it means that it was published, too.
             logger.info("transaction_id: %s is already in the transaction pool", transaction_id)
+
+    def _remove_transactions_from_pool(self, block):
+        for transaction in block.transactions:
+            if not transaction.is_coinbase:
+                try:
+                    self.transaction_pool.delete_transaction(transaction_id=transaction.calculate_hash())
+                except TransactionIsNotInPoolError:
+                    logger.warning(
+                        "transaction_id: %s not in transaction pool", transaction.calculate_hash()
+                    )
 
     def get_next_block(self, previous_hash):
         for block_number, block in enumerate(self.blocks):
@@ -283,16 +293,6 @@ class Blockchain:
     #             return block, block_height
     #
     #     return None, None
-
-    def _remove_transactions_from_pool(self, block):
-        for transaction in block.transactions:
-            if not transaction.is_coinbase:
-                try:
-                    self.transaction_pool.delete_transaction(transaction_id=transaction.calculate_hash())
-                except TransactionIsNotInPoolError:
-                    logger.warning(
-                        "transaction_id: %s not in transaction pool", transaction.calculate_hash()
-                    )
 
     def receive_block(self, block):
         # This blockchain can handle currently only one fork from the main chain at any given time.
@@ -432,6 +432,7 @@ class Blockchain:
         #   transaction. this operation is suboptimal, to be very kind to myself.
         # this is how bitcoin nodes track the UTXO set:
         #   https://en.bitcoin.it/wiki/Bitcoin_Core_0.11_(ch_2):_Data_Storage#The_UTXO_set_.28chainstate_leveldb.29
+        # no zero-conf inputs allowed
         if block_height is None:
             block_height = self.height
 
