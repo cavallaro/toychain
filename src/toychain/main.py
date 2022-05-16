@@ -35,6 +35,12 @@ class TransactionPool:
     def add_transaction(self, transaction, fee):
         self._transactions[transaction.calculate_hash()] = {"transaction": transaction, "fee": fee}
 
+    def get_transaction(self, transaction_id):
+        try:
+            return self._transactions[transaction_id]
+        except KeyError:
+            raise TransactionIsNotInPoolError()
+
     def get_transactions(self, count):
         # this is rather inefficient, i am well aware.
         count = min(count, len(self._transactions))
@@ -234,8 +240,16 @@ class Blockchain:
         return int(self.base_block_reward/(int(self.height / 5)+1))
 
     def add_transaction_to_pool(self, transaction):
-        transaction_fee = self._verify_transaction(transaction)
-        self.transaction_pool.add_transaction(transaction=transaction, fee=transaction_fee)
+        transaction_id = transaction.calculate_hash()
+        try:
+            self.transaction_pool.get_transaction(transaction_id=transaction_id)
+        except TransactionIsNotInPoolError:
+            transaction_fee = self._verify_transaction(transaction)
+            self.transaction_pool.add_transaction(transaction=transaction, fee=transaction_fee)
+            self.publish_transaction(transaction)
+        else:
+            # if it's in the pool, it means that it was published, too.
+            logger.info("transaction_id: %s is already in the transaction pool", transaction_id)
 
     def get_next_block(self, previous_hash):
         for block_number, block in enumerate(self.blocks):
@@ -546,6 +560,19 @@ class Blockchain:
                 pass
 
         logger.info("Block sent to %s peer(s)", successful)
+
+    def publish_transaction(self, transaction):
+        successful = 0
+        for peer in self.peers:
+            # this call is blocking, we eventually want to make it so that it's non-blocking.
+            logger.info("Attempt to send transaction to peer: %s", peer)
+            try:
+                requests.post("http://%s:5000/transactions" % peer, json=json.dumps(transaction.serialize()))
+                successful += 1
+            except requests.exceptions.ConnectionError:
+                pass
+
+        logger.info("Transaction sent to %s peer(s)", successful)
 
     def synchronize(self):
         if len(self.peers) == 0:

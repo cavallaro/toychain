@@ -1,4 +1,5 @@
 import logging
+import random
 import threading
 import time
 
@@ -28,6 +29,6 @@ class Miner(threading.Thread):
             if block:
                 logger.info("Mined new block: %s", block.serialize())
 
-            time.sleep(10)
+            time.sleep(random.randrange(2, 10, 1))  # impacts chances of mining a new block
 
         logger.info("Bye!")

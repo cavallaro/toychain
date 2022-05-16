@@ -115,6 +115,14 @@ def create_app():
 
         return transaction.serialize()
 
+    @app.route('/blocks/<block_hash>', methods=['GET'])
+    def get_block(block_hash):
+        block = blockchain.get_block(hash=block_hash)
+        if not block:
+            return "", 404
+
+        return flask.jsonify(block.serialize())
+
     @app.route('/blocks/get-next', methods=['GET'])
     def get_next_block():
         """
@@ -130,7 +138,7 @@ def create_app():
         if not peer_tip:
             # return Genesis block
             block = blockchain.blocks[0]
-            app.logger.info("Get blocks call, no peer tip provided. Genesis block: %s", json.dumps(block.serialize()))
+            app.logger.info("Get next block call, no peer tip provided. Genesis block: %s", json.dumps(block.serialize()))
             return flask.jsonify(block.serialize())
 
         try:
@@ -140,10 +148,10 @@ def create_app():
             return "", 400
 
         if not block:
-            app.logger.info("Get blocks call, peer's tip: %s is same as ours", peer_tip)
+            app.logger.info("Get next block call, peer's tip: %s is same as ours", peer_tip)
             return "", 404
 
-        app.logger.info("Get blocks call, peer tip: %s, next block: %s", peer_tip, json.dumps(block.serialize()))
+        app.logger.info("Get next block call, peer tip: %s, next block: %s", peer_tip, json.dumps(block.serialize()))
         return flask.jsonify(block.serialize())
 
     @app.route('/blocks', methods=['POST'])
@@ -153,6 +161,14 @@ def create_app():
         block = toychain.main.Block.unserialize(json.loads(flask.request.json))
         app.logger.info("New block received, with hash: %s, prev: %s", block.calculate_hash(), block.prev)
         blockchain.receive_block(block)
+        return "", 202
+
+    @app.route('/transactions', methods=['POST'])
+    def receive_transaction():
+        # note: same as on receive_block
+        transaction = toychain.main.Transaction.unserialize(json.loads(flask.request.json))
+        app.logger.info("New transaction received, with hash: %s", transaction.calculate_hash())
+        blockchain.add_transaction_to_pool(transaction)
         return "", 202
 
     @app.route('/persistence/save', methods=['POST'])
