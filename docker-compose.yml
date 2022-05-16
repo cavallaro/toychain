@@ -6,6 +6,7 @@ services:
         environment:
             TOYCHAIN_BLOCKCHAIN_FILE: "blockchain.json"
             TOYCHAIN_PEERS: "toychain_b"
+            TOYCHAIN_SYNCHRONIZE: 0
         ports:
             - 8443:5000
         image: toychain/webservice:0.1
@@ -16,6 +17,7 @@ services:
         environment:
             TOYCHAIN_BLOCKCHAIN_FILE: "blockchain.json"
             TOYCHAIN_PEERS: "toychain_a"
+            TOYCHAIN_SYNCHRONIZE: 1
         ports:
             - 8444:5000
         image: toychain/webservice:0.1

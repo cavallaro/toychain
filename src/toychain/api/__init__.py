@@ -1,11 +1,14 @@
 import base64
+import contextlib
 import json
 import logging
 import os
+import time
 
 # others
 import ecdsa
 import flask
+import requests.exceptions
 
 # own
 import toychain.main
@@ -51,6 +54,25 @@ def create_app():
 
     blockchain.peers = set(os.getenv("TOYCHAIN_PEERS", "").split())
     # blockchain.initialize(miner_address="b1917dfe83c6fa47b53aee554347e2fae535c7b2e035191946272df19b31694d")
+
+    @contextlib.contextmanager
+    def restart_miner():
+        global miner
+
+        miner_was_alive = False
+        if miner and miner.is_alive():
+            miner.stop()
+            miner.join()
+            miner_was_alive = True
+
+        yield
+
+        if miner_was_alive:
+            miner = toychain.miner.Miner(
+                blockchain=blockchain,
+                miner_address='b1917dfe83c6fa47b53aee554347e2fae535c7b2e035191946272df19b31694d'
+            )
+            miner.start()
 
     @app.route('/transactions/<string:transaction_id>', methods=['GET'])
     def get_transaction(transaction_id):
@@ -109,14 +131,20 @@ def create_app():
             # return Genesis block
             block = blockchain.blocks[0]
             app.logger.info("Get blocks call, no peer tip provided. Genesis block: %s", json.dumps(block.serialize()))
-            return flask.jsonify({"block": block.serialize()})
+            return flask.jsonify(block.serialize())
 
-        block = blockchain.get_next_block(previous_hash=peer_tip)
-        if block:
-            app.logger.info("Get blocks call, peer tip: %s, next block: %s", peer_tip, json.dumps(block.serialize()))
-            return flask.jsonify({"block": block.serialize()})
-        else:
+        try:
+            block = blockchain.get_next_block(previous_hash=peer_tip)
+        except toychain.main.BlockIsNotInMainChainError as e:
+            app.logger.info(str(e))
+            return "", 400
+
+        if not block:
+            app.logger.info("Get blocks call, peer's tip: %s is same as ours", peer_tip)
             return "", 404
+
+        app.logger.info("Get blocks call, peer tip: %s, next block: %s", peer_tip, json.dumps(block.serialize()))
+        return flask.jsonify(block.serialize())
 
     @app.route('/blocks', methods=['POST'])
     def receive_block():
@@ -139,25 +167,29 @@ def create_app():
         return "", 200
 
     @app.route('/persistence/load', methods=['POST'])
+    @restart_miner()
     def load():
-        global miner
-
-        miner_was_alive = False
-        if miner and miner.is_alive():
-            miner.stop()
-            miner.join()
-            miner_was_alive = True
-
         load_blockchain(flask.request.json.get('filename', blockchain_filename))
-
-        if miner_was_alive:
-            miner = toychain.miner.Miner(
-                blockchain=blockchain,
-                miner_address='b1917dfe83c6fa47b53aee554347e2fae535c7b2e035191946272df19b31694d'
-            )
-            miner.start()
-
         return "", 200
+
+    @app.route('/synchronize', methods=['POST'])
+    @restart_miner()
+    def synchronize():
+        blockchain.synchronize()
+        return "", 200
+
+    if int(os.getenv("TOYCHAIN_SYNCHRONIZE", 0)):
+        app.logger.info("Attempt to synchronize before starting")
+        for i in range(5):
+            try:
+                blockchain.synchronize()
+                break
+            except requests.exceptions.ConnectionError as e:
+                app.logger.error(str(e))
+                time.sleep(2)
+
+        else:
+            app.logger.info("Unable to synchronize blockchain")
 
     miner = toychain.miner.Miner(
         blockchain=blockchain,

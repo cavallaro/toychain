@@ -24,6 +24,10 @@ class TransactionIsNotInPoolError(BlockchainError):
     pass
 
 
+class BlockIsNotInMainChainError(BlockchainError):
+    pass
+
+
 class TransactionPool:
     def __init__(self):
         self._transactions = {}
@@ -241,7 +245,7 @@ class Blockchain:
                 else:
                     return self.blocks[block_number + 1]
 
-        raise Exception("Block with hash: %s not found")
+        raise BlockIsNotInMainChainError("There is no block with hash: %s in our main chain" % previous_hash)
 
     def get_block_height(self, hash):
         for block_height, block in enumerate(self.blocks):
@@ -535,10 +539,35 @@ class Blockchain:
         for peer in self.peers:
             # this call is blocking, we eventually want to make it so that it's non-blocking.
             logger.info("Attempt to send block to peer: %s", peer)
-            requests.post("http://%s:5000/blocks" % peer, json=json.dumps(block.serialize()))
-            successful += 1
+            try:
+                requests.post("http://%s:5000/blocks" % peer, json=json.dumps(block.serialize()))
+                successful += 1
+            except requests.exceptions.ConnectionError:
+                pass
 
         logger.info("Block sent to %s peer(s)", successful)
+
+    def synchronize(self):
+        if len(self.peers) == 0:
+            raise Exception("Can't synchronize if there is not at least one peer")
+
+        # pick one peer in the set
+        peer = next(iter(self.peers))
+
+        def retrieve():
+            current_tip_hash = self.tip.calculate_hash()
+            logger.info(
+                "Attempt to retrieve the next block, current tip: %s, height: %s", current_tip_hash, self.height
+            )
+            return requests.get("http://%s:5000/blocks/get-next" % peer, params={"current-tip": current_tip_hash})
+
+        response = retrieve()
+        while len(response.content) > 0:
+            block = Block.unserialize(response.json())
+            logger.info("A new block with hash: %s was retrieved", block.calculate_hash())
+            self.receive_block(block)
+
+            response = retrieve()
 
     def initialize(self, miner_address):
         self.blocks = []
