@@ -10,7 +10,7 @@ from main import Blockchain, Client, Transaction
 
 @pytest.fixture
 def blockchain(client):
-    _blockchain = Blockchain()
+    _blockchain = Blockchain(base_difficulty=2)
     _blockchain.initialize(miner_address='b1917dfe83c6fa47b53aee554347e2fae535c7b2e035191946272df19b31694d')
 
     yield _blockchain

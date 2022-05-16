@@ -2,14 +2,18 @@ version: "3.9"
 services:
     toychain_a:
         build: .
-        container_name: toychain_a.webservice
+        container_name: toychain_a
+        environment:
+            TOYCHAIN_PEERS: "toychain_b"
         ports:
             - 8443:5000
         image: toychain/webservice:0.1
 
     toychain_b:
         build: .
-        container_name: toychain_b.webservice
+        container_name: toychain_b
+        environment:
+            TOYCHAIN_PEERS: "toychain_a"
         ports:
             - 8444:5000
         image: toychain/webservice:0.1

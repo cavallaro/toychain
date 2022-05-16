@@ -6,6 +6,7 @@ import time
 
 # others
 import ecdsa
+import requests
 
 
 logger = logging.getLogger('toychain')
@@ -153,13 +154,36 @@ class Transaction:
 
 
 class Blockchain:
-    def __init__(self, transactions_per_block=2, confirmations=2):
+    def __init__(self, transactions_per_block=2, confirmations=2, base_difficulty=20, base_block_reward=50):
         self.transactions_per_block = transactions_per_block
         self.confirmations = confirmations
+        self.base_difficulty = base_difficulty
+        self.base_block_reward = base_block_reward
+
         self.transaction_pool = TransactionPool()
+
         self.blocks = []
         self.fork = []
         self.orphans = []
+
+        self.peers = set()
+
+    def serialize(self):
+        # TODO: what about the transaction pool? should we dump the transactions?
+        return {
+            "blocks": [block.serialize() for block in self.blocks],
+            "fork": [block.serialize() for block in self.fork],
+            "orphans": [block.serialize() for block in self.orphans]
+        }
+
+    @classmethod
+    def unserialize(cls, serialized_blockchain):
+        blockchain = cls()
+        blockchain.blocks = [Block.unserialize(sb) for sb in serialized_blockchain["blocks"]]
+        blockchain.fork = [Block.unserialize(sb) for sb in serialized_blockchain["fork"]]
+        blockchain.orphans = [Block.unserialize(sb) for sb in serialized_blockchain["orphans"]]
+
+        return blockchain
 
     def calculate_balance(self, address):
         outputs = {}  # {(transaction_id, vout): amount}
@@ -198,15 +222,15 @@ class Blockchain:
 
     @property
     def difficulty(self):
-        return 10 + int(self.height / 2)
+        return self.base_difficulty + int(self.height / 2)
 
     @property
     def block_reward(self):
-        # start with 50 units, halve every 5 blocks.
-        return int(50/(int(self.height / 5)+1))
+        # halve every 5 blocks.
+        return int(self.base_block_reward/(int(self.height / 5)+1))
 
     def add_transaction_to_pool(self, transaction):
-        transaction_fee = self.verify_transaction(transaction)
+        transaction_fee = self._verify_transaction(transaction)
         self.transaction_pool.add_transaction(transaction=transaction, fee=transaction_fee)
 
     def get_next_block(self, previous_hash):
@@ -265,6 +289,13 @@ class Blockchain:
         # If any of the discarded blocks was the tip of our main chain:
         #   - select the tip of the largest chain as the tip of our new main chain.
         #   - return to the pool the transactions in the discarded blocks that were part of our main chain.
+
+        block_hash = block.calculate_hash()
+        block_height = self.get_block_height(block_hash)
+        if block_height is not None:
+            logger.info("Block with hash: %s exists in our chain at height: %s", block_hash, block_height)
+            return
+
         self._receive_block(block)
         self._reconverge()
 
@@ -275,10 +306,12 @@ class Blockchain:
 
             self.blocks.append(block)
             logger.info("Genesis block has been added")
+            self.publish_block(block)
 
         elif block.prev == self.tip.calculate_hash():
             self.blocks.append(block)
             logger.info("New block has been added, new height: %s", self.height)
+            self.publish_block(block)
 
         else:
             logger.warning("Block's previous hash is not our tip")
@@ -292,6 +325,7 @@ class Blockchain:
                 if self.height - block_height < self.confirmations:
                     self.fork = [block]
                     logger.warning("Fork at block %s", fork_block_height)
+                    # TODO: should we propagate this block?
 
                 else:
                     logger.warning(
@@ -414,7 +448,7 @@ class Blockchain:
             hashfunc=hashlib.sha256
         )
 
-    def verify_transaction(self, transaction):
+    def _verify_transaction(self, transaction):
         utxos = []
 
         # check that the inputs haven't been spent.
@@ -478,18 +512,33 @@ class Blockchain:
         mask = int('f'*64, base=16) >> self.difficulty
 
         hash = block.calculate_hash()
+
         while not int(hash, base=16) <= mask:
+            if self.blocks and self.tip.prev == block.prev:
+                logger.info("Someone else has already mined the next block, so we'll abort this attempt.")
+                return
+
             block.nonce += 1
             hash = block.calculate_hash()
 
+        logger.info("A new block with hash: %s has been mined, tentative new height: %s", hash, self.height + 1)
         self.receive_block(block)
-        logger.info("A new block with hash: %s has been mined, new height: %s", hash, self.height)
 
         # clear mined transactions from the transaction pool
         for transaction in transaction_entries:
             self.transaction_pool.delete_transaction(transaction_id=transaction['transaction_id'])
 
         return block
+
+    def publish_block(self, block):
+        successful = 0
+        for peer in self.peers:
+            # this call is blocking, we eventually want to make it so that it's non-blocking.
+            logger.info("Attempt to send block to peer: %s", peer)
+            requests.post("http://%s:5000/blocks" % peer, json=json.dumps(block.serialize()))
+            successful += 1
+
+        logger.info("Block sent to %s peer(s)", successful)
 
     def initialize(self, miner_address):
         self.blocks = []

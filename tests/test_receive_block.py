@@ -3,20 +3,20 @@ from main import Blockchain, Transaction
 
 
 def test_block_is_genesis_block(client):
-    blockchain_a = Blockchain()
+    blockchain_a = Blockchain(base_difficulty=2)
     genesis_block = blockchain_a.initialize(miner_address='b1917dfe83c6fa47b53aee554347e2fae535c7b2e035191946272df19b31694d')
 
-    blockchain_b = Blockchain()
+    blockchain_b = Blockchain(base_difficulty=2)
     blockchain_b.receive_block(genesis_block)
     assert blockchain_b.height == 0
     assert blockchain_b.blocks[0].calculate_hash() == genesis_block.calculate_hash()
 
 
 def test_block_is_next_in_main_chain(client):
-    blockchain_a = Blockchain()
+    blockchain_a = Blockchain(base_difficulty=2)
     genesis_block = blockchain_a.initialize(miner_address='b1917dfe83c6fa47b53aee554347e2fae535c7b2e035191946272df19b31694d')
 
-    blockchain_b = Blockchain()
+    blockchain_b = Blockchain(base_difficulty=2)
     blockchain_b.receive_block(genesis_block)
 
     blockchain_a_block_00 = blockchain_a.blocks[0]
@@ -47,10 +47,10 @@ def test_block_is_next_in_main_chain(client):
 
 
 def test_handle_secondary_chain(client):
-    blockchain_a = Blockchain()
+    blockchain_a = Blockchain(base_difficulty=2)
     genesis_block = blockchain_a.initialize(miner_address='b1917dfe83c6fa47b53aee554347e2fae535c7b2e035191946272df19b31694d')
 
-    blockchain_b = Blockchain()
+    blockchain_b = Blockchain(base_difficulty=2)
     blockchain_b.receive_block(genesis_block)
 
     # Genesis block successfully received by blockchain_b

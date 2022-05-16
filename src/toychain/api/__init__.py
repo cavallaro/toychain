@@ -1,6 +1,7 @@
 import base64
 import json
 import logging
+import os
 
 # others
 import ecdsa
@@ -8,18 +9,32 @@ import flask
 
 # own
 import toychain.main
+import toychain.miner
 
 
 def create_app():
     logging.basicConfig(
-        format="%(pathname)s:%(lineno)s %(levelname)s - %(asctime)s - %(message)s",
+        format="%(thread)s %(threadName)12.12s %(pathname)-32.32s:%(lineno)4s %(levelname)-8s %(asctime)s | %(message)s",
         level=logging.DEBUG
     )
 
-    blockchain = toychain.main.Blockchain()
-    # blockchain.initialize(miner_address="b1917dfe83c6fa47b53aee554347e2fae535c7b2e035191946272df19b31694d")
-
     app = flask.Flask(__name__)
+    app.config['TRAP_BAD_REQUEST_ERRORS'] = True
+
+    blockchain = None
+
+    # load blockchain (if available)
+    try:
+        with open("blockchain.json") as f:
+            serialized_blockchain = json.load(f)
+        app.logger.info("A blockchain.json file exists, loading...")
+        blockchain = toychain.main.Blockchain.unserialize(serialized_blockchain)
+    except FileNotFoundError:
+        app.logger.info("No blockchain.json file exists.")
+        blockchain = toychain.main.Blockchain()
+
+    blockchain.peers = set(os.getenv("TOYCHAIN_PEERS", "").split())
+    # blockchain.initialize(miner_address="b1917dfe83c6fa47b53aee554347e2fae535c7b2e035191946272df19b31694d")
 
     @app.route('/transactions/<string:transaction_id>', methods=['GET'])
     def get_transaction(transaction_id):
@@ -89,9 +104,15 @@ def create_app():
 
     @app.route('/blocks', methods=['POST'])
     def receive_block():
-        block = toychain.main.Block.unserialize(flask.request.json['block'])
+        block = toychain.main.Block.unserialize(json.loads(flask.request.json))
         app.logger.info("New block received, with hash: %s, prev: %s", block.calculate_hash(), block.prev)
         blockchain.receive_block(block)
         return "", 202
+
+    miner = toychain.miner.Miner(
+        blockchain=blockchain,
+        miner_address='b1917dfe83c6fa47b53aee554347e2fae535c7b2e035191946272df19b31694d'
+    )
+    miner.start()
 
     return app
