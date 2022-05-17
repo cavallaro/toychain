@@ -324,10 +324,27 @@ class Blockchain:
             logger.info("Block with hash: %s exists in our chain at height: %s", block_hash, block_height)
             return
 
-        self._receive_block(block)
+        if self._receive_block(block):
+            # process orphans
+            while True:
+                success = False
+                orphan_blocks = self.orphans[:]
+                self.orphans.clear()
+                for orphan_block in orphan_blocks:
+                    orphan_block_hash = orphan_block.calculate_hash()
+                    logger.info("Attempt to link orphan block with hash: %s", orphan_block_hash)
+                    if self._receive_block(orphan_block):
+                        logger.info("Successfully linked orphan block with hash: %s", orphan_block_hash)
+                        success = True
+
+                if not success:
+                    break
+
         self._reconverge()
 
     def _receive_block(self, block):
+        # return True if we have been able to connect the block, either to the main chain or to the secondary chain
+
         if self.height < 0:
             if not block.is_genesis:
                 raise Exception("First block in the chain must be a Genesis block")
@@ -335,12 +352,14 @@ class Blockchain:
             self.blocks.append(block)
             logger.info("Genesis block has been added")
             self.publish_block(block)
+            return True
 
         elif block.prev == self.tip.calculate_hash():
             self.blocks.append(block)
             logger.info("New block has been added, new height: %s", self.height)
             self._remove_transactions_from_pool(block)
             self.publish_block(block)
+            return True
 
         else:
             logger.warning("Block's previous hash is not our tip")
@@ -355,6 +374,7 @@ class Blockchain:
                     self.fork = [block]
                     logger.warning("Fork at block %s", fork_block_height)
                     # TODO: should we propagate this block?
+                    return True
 
                 else:
                     logger.warning(
@@ -365,6 +385,7 @@ class Blockchain:
             elif self.fork and block.prev == self.fork[-1].calculate_hash():
                 self.fork.append(block)
                 logger.warning("Block points to the tip of a fork, fork is now %s blocks long", len(self.fork))
+                return True
 
             else:
                 # as we won't be tracking multiple forks in this basic implementation, we assume this is an orphan block
