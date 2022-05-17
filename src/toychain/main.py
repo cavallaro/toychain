@@ -555,7 +555,7 @@ class Blockchain:
             # this call is blocking, we eventually want to make it so that it's non-blocking.
             logger.info("Attempt to send block to peer: %s", peer)
             try:
-                requests.post("http://%s:5000/blocks" % peer, json=json.dumps(block.serialize()))
+                requests.post("http://%s:5000/blocks" % peer, json=block.serialize())
                 successful += 1
             except requests.exceptions.ConnectionError:
                 pass
@@ -568,7 +568,7 @@ class Blockchain:
             # this call is blocking, we eventually want to make it so that it's non-blocking.
             logger.info("Attempt to send transaction to peer: %s", peer)
             try:
-                requests.post("http://%s:5000/transactions" % peer, json=json.dumps(transaction.serialize()))
+                requests.post("http://%s:5000/transactions" % peer, json=transaction.serialize())
                 successful += 1
             except requests.exceptions.ConnectionError:
                 pass

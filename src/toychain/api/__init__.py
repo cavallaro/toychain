@@ -119,7 +119,7 @@ def create_app():
     def receive_block():
         # note: we will try to retransmit the block to the sender, too, because the `publish_block` method is unaware
         #   of who sent it.
-        block = toychain.main.Block.unserialize(json.loads(flask.request.json))
+        block = toychain.main.Block.unserialize(flask.request.json)
         app.logger.info("New block received, with hash: %s, prev: %s", block.calculate_hash(), block.prev)
 
         blockchain.receive_block(block)
@@ -140,7 +140,7 @@ def create_app():
     @app.route('/transactions', methods=['POST'])
     def receive_transaction():
         # note: same as on receive_block
-        transaction = toychain.main.Transaction.unserialize(json.loads(flask.request.json))
+        transaction = toychain.main.Transaction.unserialize(flask.request.json)
         app.logger.info("New transaction received, with hash: %s", transaction.calculate_hash())
 
         blockchain.add_transaction_to_pool(transaction)
@@ -176,7 +176,10 @@ def create_app():
         address = flask.request.json['address']
         app.logger.info("Block rewards and fees will be paid to: %s", address)
         block = blockchain.mine(miner_address=address)
-        return block.serialize()
+        if block:
+            return block.serialize()
+
+        return "", 409
 
     @app.route('/persistence/save', methods=['POST'])
     def save():
